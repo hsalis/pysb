@@ -56,3 +56,13 @@ def check_model_against_component_list(model, component_list):
                 % (model.name, i, comp_str, model_comp_str)
 
     assert True
+
+def assert_equal_symmetric(a, b):
+    assert_equal(a, b)
+    assert_equal(b, a)
+
+def assert_not_equal_symmetric(a, b):
+    assert_not_equal(a, b)
+    assert_not_equal(b, a)
+
+

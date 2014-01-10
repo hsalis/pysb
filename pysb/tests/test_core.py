@@ -16,23 +16,39 @@ def test_component_names_invalid():
 def test_monomer():
     sites = ['x', 'y', 'z']
     states = {'y': ['foo', 'bar', 'baz'], 'x': ['e']}
-    m = Monomer('A', sites, states, _export=False)
-    assert_equal(m.sites, sites)
-    assert_equal(m.site_states, states)
-    assert_equal(type(m()), MonomerPattern)
+    A = Monomer('A', sites, states, _export=False)
+    assert_equal(A.sites, sites)
+    assert_equal(A.site_states, states)
+    assert_equal(type(A()), MonomerPattern)
 
     assert_raises(ValueError, Monomer, 'A', 'x', _export=False)
     assert_raises(Exception, Monomer, 'A', 'x', 'x', _export=False)
     assert_raises(Exception, Monomer, 'A', ['x'], {'y': ['a']}, _export=False)
     assert_raises(Exception, Monomer, 'A', ['x'], {'x': [1]}, _export=False)
-    
-    o=Monomer('B', ['x','y'], _export=False)
-    ok_(m != o)
-    assert_equal(m,m)
-    o = deepcopy(m)
-    assert_equal(m, o)
-    o.sites=['y','x', 'z']
-    assert_equal(m, o)
+
+    # Test equality operator
+    assert_equal_symmetric(A, A) # Should equal itself
+    A_copy = deepcopy(A)
+    assert_equal_symmetric(A, A_copy) # Should equal its copy
+    A_copy.sites=['y', 'x', 'z']
+    assert_equal_symmetric(A, A_copy) # Site order doesn't matter
+    A_copy2 = deepcopy(A)
+    A_copy2.site_states['y'] = ['foo']
+    assert_not_equal_symmetric(A, A_copy2) # Lists contain different members
+    A_copy2.site_states['y'] = ['foo', 'baz', 'bar']
+    assert_equal_symmetric(A, A_copy2) # State order shouldn't matter
+    B = Monomer('B', ['x','y'], _export=False)
+    assert_not_equal_symmetric(A, B) # B lacks site 'z', so not equal
+
+def test_unhashable():
+    """Mutable objects with __eq__ methods should not be hashable."""
+    A = Monomer('A', [], _export=False)
+    assert_raises(TypeError, hash, A) # Monomer
+    assert_raises(TypeError, hash, A()) # MonomerPattern
+    P = Parameter('P', 0, _export=False)
+    assert_raises(TypeError, hash, P) # Parameter
+    C = Compartment('C', dimension=3, _export=False)
+    assert_raises(TypeError, hash, C) # Compartment
 
 def test_monomer_pattern():
     sites = ['x', 'y', 'z']
