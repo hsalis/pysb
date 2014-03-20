@@ -44,7 +44,8 @@ import itertools
 __all__ = ['equilibrate',
            'bind', 'bind_table',
            'catalyze', 'catalyze_state',
-           'catalyze_one_step', 'catalyze_one_step_reversible',
+           'catalyze_one_step', 'catalyze_one_step_reversible', 'catalyze_two_step_reversible',
+           'catalyze_ordered_bisubstrate_reversible',
            'synthesize', 'degrade', 'synthesize_degrade_table',
            'assemble_pore_sequential', 'pore_transport', 'pore_bind']
 
@@ -581,7 +582,210 @@ def catalyze(enzyme, e_site, substrate, s_site, product, klist):
                               [klist[2]], ['kc'])
 
     return components
+    
+def catalyze_two_step_reversible(enzyme, e_site, substrate, s_site, product, p_site, klist):
+    """
+    Generate the reversible two-step catalytic reaction E + S <> E:S <> E + P.
+        Added on March 11th, 2014 by Howard M. Salis
+    
+    Parameters
+    ----------
+    enzyme, substrate, product : Monomer or MonomerPattern
+        E, S and P in the above reaction.
+    e_site, s_site : string
+        The names of the sites on `enzyme` and `substrate` (respectively) where
+        they bind each other to form the E:S complex.
+    klist : list of 4 Parameters or list of 4 numbers
+        Forward substrate binding, reverse substrate binding, forward catalytic rate constant, and reverse catalytic rate constant (in that order).
+        If Parameters are passed, they will be used directly in the generated
+        Rules. If numbers are passed, Parameters will be created with
+        automatically generated names based on the names and states of enzyme,
+        substrate and product and these parameters will be included at the end
+        of the returned component list.
 
+    Returns
+    -------
+    components : ComponentSet
+        The generated components. Contains two Rules (bidirectional complex
+        formation and unidirectional product dissociation), and optionally three
+        Parameters if klist was given as plain numbers.
+
+    Notes
+    -----
+    When passing a MonomerPattern for `enzyme` or `substrate`, do not include
+    `e_site` or `s_site` in the respective patterns. The macro will handle this.
+
+    Examples
+    --------
+    Using distinct Monomers for substrate and product::
+
+        Model()
+        Monomer('E', ['b'])
+        Monomer('S', ['b'])
+        Monomer('P')
+        catalyze_two_step_reversible(E(), 'b', S(), 'b', P(), (1e-4, 1e-1, 1, 1e-4))
+
+    Execution::
+
+        >>> Model() # doctest:+ELLIPSIS
+        <Model '<interactive>' (monomers: 0, rules: 0, parameters: 0, expressions: 0, compartments: 0) at ...>
+        >>> Monomer('E', ['b'])
+        Monomer('E', ['b'])
+        >>> Monomer('S', ['b'])
+        Monomer('S', ['b'])
+        >>> Monomer('P')
+        Monomer('P')
+        >>> catalyze_two_step_reversible(E(), 'b', S(), 'b', P(), (1e-4, 1e-1, 1, 1e-4)) # doctest:+NORMALIZE_WHITESPACE
+        ComponentSet([
+         Rule('bind_E_S_to_ES', E(b=None) + S(b=None) <> E(b=1) % S(b=1),
+             bind_E_S_to_ES_kf, bind_E_S_to_ES_kr),
+         Parameter('bind_E_S_to_ES_kf', 0.0001),
+         Parameter('bind_E_S_to_ES_kr', 0.1),
+         Rule('catalyze_ES_to_E_P', E(b=1) % S(b=1) <> E(b=None) + P(),
+             catalyze_ES_to_E_P_kcf),
+         Parameter('catalyze_ES_to_E_P_kcf', 1.0),
+         Parameter('catalyze_E_P_to_ES_kcr', 1e-4)
+         ])
+
+    Using a single Monomer for substrate and product with a state change::
+
+        Monomer('Kinase', ['b'])
+        Monomer('Substrate', ['b', 'y'], {'y': ('U', 'P')})
+        catalyze_two_step_reversible(Kinase(), 'b', Substrate(y='U'), 'b', Substrate(y='P'),
+                 (1e-4, 1e-1, 1, 1e-4))
+
+    Execution::
+
+        >>> Model() # doctest:+ELLIPSIS
+        <Model '<interactive>' (monomers: 0, rules: 0, parameters: 0, expressions: 0, compartments: 0) at ...>
+        >>> Monomer('Kinase', ['b'])
+        Monomer('Kinase', ['b'])
+        >>> Monomer('Substrate', ['b', 'y'], {'y': ('U', 'P')})
+        Monomer('Substrate', ['b', 'y'], {'y': ('U', 'P')})
+        >>> catalyze(Kinase(), 'b', Substrate(y='U'), 'b', Substrate(y='P'), (1e-4, 1e-1, 1)) # doctest:+NORMALIZE_WHITESPACE
+        ComponentSet([
+         Rule('bind_Kinase_SubstrateU_to_KinaseSubstrateU',
+             Kinase(b=None) + Substrate(b=None, y='U') <> Kinase(b=1) % Substrate(b=1, y='U'),
+             bind_Kinase_SubstrateU_to_KinaseSubstrateU_kf,
+             bind_Kinase_SubstrateU_to_KinaseSubstrateU_kr),
+         Parameter('bind_Kinase_SubstrateU_to_KinaseSubstrateU_kf', 0.0001),
+         Parameter('bind_Kinase_SubstrateU_to_KinaseSubstrateU_kr', 0.1),
+         Rule('catalyze_KinaseSubstrateU_to_Kinase_SubstrateP',
+              Kinase(b=1) % Substrate(b=1, y='U') <> Kinase(b=None) + Substrate(b=None, y='P'),
+              catalyze_KinaseSubstrateU_to_Kinase_SubstrateP_kc),
+         Parameter('catalyze_KinaseSubstrateU_to_Kinase_SubstrateP_kcf', 1.0),
+         Parameter('catalyze_Kinase_SubstrateP_to_KinaseSubstrateU_kcr', 1e-4),
+         ])
+
+    """
+
+    _verify_sites(enzyme, e_site)
+    _verify_sites(substrate, s_site)
+    _verify_sites(product, p_site)
+    
+    #Set up some aliases to the patterns we'll use in the rules
+    enzyme_free = enzyme({e_site: None})
+    #retain any existing state for substrate's s_site, otherwise set it to None
+    if s_site in substrate().site_conditions:
+        substrate_free = substrate()
+        s_state = (substrate().site_conditions[s_site], 1)
+    else:
+        substrate_free = substrate({s_site: None})
+        s_state = 1
+        
+    product_free = product({p_site: None})
+    
+    es_complex = enzyme({e_site: 1}) % substrate({s_site: 1})
+    
+    
+    # create the rules
+    components = _macro_rule('bind_rule',
+                             enzyme_free + substrate_free <> es_complex,
+                             klist[0:2], ['kf', 'kr'])
+    
+    components |= _macro_rule('catalyze_rule',
+                              es_complex <> enzyme_free + product_free,
+                              klist[2:4], ['kcf','kcr'])
+
+    return components
+
+def catalyze_ordered_bisubstrate_reversible(enzyme, e_site1, e_site2, substrate1, s1_site, substrate2, s2_site, product, p_site, klist):
+    """
+    Generate the reversible bisubstrate, 3-step catalytic reaction E + S1 <> E:S1, E:S1 + S2 <> E:S1:S2, E:S1:S2 <> E + P.
+        Added on March 11th, 2014 by Howard M. Salis
+    
+    Parameters
+    ----------
+    enzyme, substrate1, substrate2, product : Monomer or MonomerPattern
+        E, S and P in the above reaction.
+    e_site1, e_site2, s1_site, s2_site, p_site: string
+        The names of the sites on `enzyme` and `substrate` (respectively) where
+        they bind each other to form the E:S1 and E:S1:S2 complexes.
+    klist : list of 6 Parameters or list of 6 numbers
+        Forward substrate1 binding, reverse substrate1 binding, forward substrate2 binding, reverse substrate2 binding,
+        forward catalytic rate constant, and reverse catalytic rate constant (in that order).
+        If Parameters are passed, they will be used directly in the generated
+        Rules. If numbers are passed, Parameters will be created with
+        automatically generated names based on the names and states of enzyme,
+        substrate and product and these parameters will be included at the end
+        of the returned component list.
+
+    Returns
+    -------
+    components : ComponentSet
+        The generated components. Contains two Rules (bidirectional complex
+        formation and unidirectional product dissociation), and optionally three
+        Parameters if klist was given as plain numbers.
+
+    Notes
+    -----
+    When passing a MonomerPattern for `enzyme` or `substrate`, do not include
+    `e_site` or `s_site` in the respective patterns. The macro will handle this.
+
+    """
+
+    _verify_sites(enzyme, e_site1)
+    _verify_sites(enzyme, e_site2)
+    _verify_sites(substrate1, s1_site)
+    _verify_sites(substrate2, s2_site)
+
+    #Set up some aliases to the patterns we'll use in the rules
+    enzyme_free = enzyme({e_site1: None, e_site2: None})
+    #retain any existing state for substrate's s_site, otherwise set it to None
+    if s1_site in substrate1().site_conditions:
+        substrate_free = substrate1()
+        s1_state = (substrate1().site_conditions[s1_site], 1)
+    else:
+        substrate1_free = substrate1({s1_site: None})
+        s1_state = 1
+        
+    if s2_site in substrate2().site_conditions:
+        substrate2_free = substrate2()
+        s2_state = (substrate2().site_conditions[s2_site], 2)
+    else:
+        substrate2_free = substrate2({s2_site: None})
+        s2_state = 2
+    
+    product_free = product({p_site: None})
+    
+    es1_complex = enzyme({e_site1: s1_state, e_site2: None}) % substrate1({s1_site: s1_state})
+    es1_s2_complex = enzyme({e_site1: s1_state, e_site2: s2_state}) % substrate1({s1_site: s1_state}) % substrate2({s2_site: s2_state})
+    
+    # create the rules
+    components = _macro_rule('S1_binds',
+                             enzyme_free + substrate1_free <> es1_complex,
+                             klist[0:2], ['k1f', 'k1r'])
+    
+    components |= _macro_rule('S2_binds',
+                             es1_complex + substrate2_free <> es1_s2_complex,
+                             klist[2:4], ['k2f', 'k2r'])
+                             
+    components |= _macro_rule('catalyze',
+                              es1_s2_complex <> enzyme_free + product_free,
+                              klist[4:6], ['kcf','kcr'])
+
+    return components
+    
 def catalyze_state(enzyme, e_site, substrate, s_site, mod_site,
                    state1, state2, klist):
     """
